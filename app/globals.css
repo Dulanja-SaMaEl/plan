@@ -1,0 +1,95 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0F172A;
+  --foreground: #F8FAFC;
+  --card: #091B21;
+  --card-foreground: #F8FAFC;
+  --popover: #091B21;
+  --popover-foreground: #F8FAFC;
+  --primary: #00FF9C;
+  --primary-foreground: #091B21;
+  --secondary: #003F59;
+  --secondary-foreground: #F8FAFC;
+  --muted: #1e3a5f;
+  --muted-foreground: #94A3B8;
+  --accent: #00FF9C;
+  --accent-foreground: #091B21;
+  --destructive: #EF4444;
+  --destructive-foreground: #F8FAFC;
+  --border: #1e3a5f;
+  --input: #1e3a5f;
+  --ring: #00FF9C;
+  --radius: 0.5rem;
+}
+
+* {
+  border-color: #1e3a5f;
+  box-sizing: border-box;
+}
+
+body {
+  background-color: #0F172A;
+  color: #F8FAFC;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #091B21;
+}
+::-webkit-scrollbar-thumb {
+  background: #003F59;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #00FF9C55;
+}
+
+/* Code blocks */
+code {
+  font-family: "JetBrains Mono", "Fira Code", Cascadia Code, monospace;
+  font-size: 0.875em;
+}
+
+/* Utilities */
+.text-accent {
+  color: #00FF9C;
+}
+.bg-accent {
+  background-color: #00FF9C;
+}
+.border-accent {
+  border-color: #00FF9C;
+}
+.bg-dark {
+  background-color: #091B21;
+}
+.bg-secondary-brand {
+  background-color: #003F59;
+}
+.glow-accent {
+  box-shadow: 0 0 20px rgba(0, 255, 156, 0.15);
+}
+.card-dark {
+  background-color: #0d1f35;
+  border: 1px solid #1e3a5f;
+}
+
+/* Selection */
+::selection {
+  background-color: rgba(0, 255, 156, 0.2);
+  color: #F8FAFC;
+}
+
+/* Focus visible */
+:focus-visible {
+  outline: 2px solid #00FF9C;
+  outline-offset: 2px;
+}
