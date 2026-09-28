@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, createContext, useContext, ReactNode } from 'react';
 import type {
   User, Client, Project, Task, CalendarEvent, TimeEntry,
   HospitalVisit, BufferBlock, ContentItem, LeetCodeProblem,
@@ -14,13 +14,36 @@ import {
   seedLeetCode, seedCourses, seedKnowledgeTopics, seedConcepts,
   seedInterviewQuestions, seedArchitecturePatterns
 } from '@/lib/data/seed';
+import {
+  fetchInitialDataFromSupabase,
+  dbUpsertTask,
+  dbDeleteTask,
+  dbUpsertProject,
+  dbDeleteProject,
+  dbUpsertClient,
+  dbDeleteClient,
+  dbUpsertTimeEntry,
+  dbDeleteTimeEntry,
+  dbUpsertHospitalVisit,
+  dbDeleteHospitalVisit,
+  dbUpsertContent,
+  dbDeleteContent,
+  dbUpsertLeetCode,
+  dbDeleteLeetCode,
+  dbUpsertConcept,
+  dbRecordReview,
+  dbRecordInterviewAttempt,
+  dbUpsertCalendarEvent,
+  dbDeleteCalendarEvent,
+  dbUpsertWeeklyReview,
+  dbUpdateUserProfile,
+} from '@/lib/supabaseSync';
 
 function loadFromStorage<T>(key: string, fallback: T): T {
   if (typeof window === 'undefined') return fallback;
   try {
     const item = localStorage.getItem(key);
     if (!item) return fallback;
-    // Parse and revive dates
     return JSON.parse(item, (k, v) => {
       if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v)) {
         return new Date(v);
@@ -37,12 +60,12 @@ function saveToStorage<T>(key: string, value: T): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {
-    // Silently fail if storage is full
+    // Fail silently if storage full
   }
 }
 
 // =====================
-// Application Store
+// Application Store Interface
 // =====================
 interface AppStore {
   // Data
@@ -141,9 +164,6 @@ interface AppStore {
   updateWeeklyReview: (id: string, data: Partial<WeeklyReview>) => void;
 }
 
-// Simple React context-based store using localStorage for persistence
-import { createContext, useContext, ReactNode } from 'react';
-
 const STORAGE_KEYS = {
   user: 'eos:user',
   capacity: 'eos:capacity',
@@ -195,6 +215,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [weeklyReviews, setWeeklyReviews] = useState<WeeklyReview[]>(() => loadFromStorage(STORAGE_KEYS.weeklyReviews, []));
   const [activeTimerEntry, setActiveTimerEntry] = useState<TimeEntry | null>(() => loadFromStorage(STORAGE_KEYS.activeTimer, null));
 
+  // Hydrate from Supabase on initial load
+  useEffect(() => {
+    fetchInitialDataFromSupabase().then((data) => {
+      if (!data) return;
+      if (data.user) setUser(data.user);
+      if (data.capacityConfig) setCapacityConfig(data.capacityConfig);
+      if (data.clients && data.clients.length > 0) setClients(data.clients);
+      if (data.projects && data.projects.length > 0) setProjects(data.projects);
+      if (data.tasks && data.tasks.length > 0) setTasks(data.tasks);
+      if (data.events && data.events.length > 0) setEvents(data.events);
+      if (data.timeEntries && data.timeEntries.length > 0) setTimeEntries(data.timeEntries);
+      if (data.hospitalVisits && data.hospitalVisits.length > 0) setHospitalVisits(data.hospitalVisits);
+      if (data.content && data.content.length > 0) setContent(data.content);
+      if (data.leetcodeProblems && data.leetcodeProblems.length > 0) setLeetcodeProblems(data.leetcodeProblems);
+      if (data.courses && data.courses.length > 0) setCourses(data.courses);
+      if (data.concepts && data.concepts.length > 0) setConcepts(data.concepts);
+      if (data.interviewQuestions && data.interviewQuestions.length > 0) setInterviewQuestions(data.interviewQuestions);
+      if (data.architecturePatterns && data.architecturePatterns.length > 0) setArchitecturePatterns(data.architecturePatterns);
+      if (data.weeklyReviews && data.weeklyReviews.length > 0) setWeeklyReviews(data.weeklyReviews);
+    }).catch((err) => {
+      console.warn('Supabase initial fetch skipped, staying on local store:', err);
+    });
+  }, []);
+
   // Persist to localStorage on changes
   useEffect(() => { saveToStorage(STORAGE_KEYS.user, user); }, [user]);
   useEffect(() => { saveToStorage(STORAGE_KEYS.capacity, capacityConfig); }, [capacityConfig]);
@@ -239,29 +283,126 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     interviewAttempts, architecturePatterns, weeklyPlans, weeklyReviews,
     activeTimerEntry,
 
-    updateUser: (data) => setUser(u => ({ ...u, ...data })),
-    updateCapacityConfig: (data) => setCapacityConfig(c => ({ ...c, ...data })),
+    updateUser: (data) => {
+      setUser((u) => {
+        const updated = { ...u, ...data };
+        dbUpdateUserProfile(updated, capacityConfig);
+        return updated;
+      });
+    },
 
-    addClient: (client) => setClients(cs => [...cs, client]),
-    updateClient: (id, data) => setClients(cs => cs.map(c => c.id === id ? { ...c, ...data } : c)),
-    deleteClient: (id) => setClients(cs => cs.filter(c => c.id !== id)),
+    updateCapacityConfig: (data) => {
+      setCapacityConfig((c) => {
+        const updated = { ...c, ...data };
+        dbUpdateUserProfile(user, updated);
+        return updated;
+      });
+    },
 
-    addProject: (project) => setProjects(ps => [...ps, project]),
-    updateProject: (id, data) => setProjects(ps => ps.map(p => p.id === id ? { ...p, ...data } : p)),
-    deleteProject: (id) => setProjects(ps => ps.filter(p => p.id !== id)),
+    addClient: (client) => {
+      setClients((cs) => [...cs, client]);
+      dbUpsertClient(client);
+    },
+    updateClient: (id, data) => {
+      setClients((cs) => cs.map((c) => {
+        if (c.id === id) {
+          const updated = { ...c, ...data, updatedAt: new Date() };
+          dbUpsertClient(updated);
+          return updated;
+        }
+        return c;
+      }));
+    },
+    deleteClient: (id) => {
+      setClients((cs) => cs.filter((c) => c.id !== id));
+      dbDeleteClient(id);
+    },
 
-    addTask: (task) => setTasks(ts => [...ts, task]),
-    updateTask: (id, data) => setTasks(ts => ts.map(t => t.id === id ? { ...t, ...data, updatedAt: new Date() } : t)),
-    deleteTask: (id) => setTasks(ts => ts.filter(t => t.id !== id)),
-    moveTask: (id, status) => setTasks(ts => ts.map(t => t.id === id ? { ...t, status, updatedAt: new Date() } : t)),
+    addProject: (project) => {
+      setProjects((ps) => [...ps, project]);
+      dbUpsertProject(project);
+    },
+    updateProject: (id, data) => {
+      setProjects((ps) => ps.map((p) => {
+        if (p.id === id) {
+          const updated = { ...p, ...data, updatedAt: new Date() };
+          dbUpsertProject(updated);
+          return updated;
+        }
+        return p;
+      }));
+    },
+    deleteProject: (id) => {
+      setProjects((ps) => ps.filter((p) => p.id !== id));
+      dbDeleteProject(id);
+    },
 
-    addEvent: (event) => setEvents(es => [...es, event]),
-    updateEvent: (id, data) => setEvents(es => es.map(e => e.id === id ? { ...e, ...data } : e)),
-    deleteEvent: (id) => setEvents(es => es.filter(e => e.id !== id)),
+    addTask: (task) => {
+      setTasks((ts) => [...ts, task]);
+      dbUpsertTask(task);
+    },
+    updateTask: (id, data) => {
+      setTasks((ts) => ts.map((t) => {
+        if (t.id === id) {
+          const updated = { ...t, ...data, updatedAt: new Date() };
+          dbUpsertTask(updated);
+          return updated;
+        }
+        return t;
+      }));
+    },
+    deleteTask: (id) => {
+      setTasks((ts) => ts.filter((t) => t.id !== id));
+      dbDeleteTask(id);
+    },
+    moveTask: (id, status) => {
+      setTasks((ts) => ts.map((t) => {
+        if (t.id === id) {
+          const updated = { ...t, status, updatedAt: new Date() };
+          dbUpsertTask(updated);
+          return updated;
+        }
+        return t;
+      }));
+    },
 
-    addTimeEntry: (entry) => setTimeEntries(es => [...es, entry]),
-    updateTimeEntry: (id, data) => setTimeEntries(es => es.map(e => e.id === id ? { ...e, ...data } : e)),
-    deleteTimeEntry: (id) => setTimeEntries(es => es.filter(e => e.id !== id)),
+    addEvent: (event) => {
+      setEvents((es) => [...es, event]);
+      dbUpsertCalendarEvent(event);
+    },
+    updateEvent: (id, data) => {
+      setEvents((es) => es.map((e) => {
+        if (e.id === id) {
+          const updated = { ...e, ...data };
+          dbUpsertCalendarEvent(updated);
+          return updated;
+        }
+        return e;
+      }));
+    },
+    deleteEvent: (id) => {
+      setEvents((es) => es.filter((e) => e.id !== id));
+      dbDeleteCalendarEvent(id);
+    },
+
+    addTimeEntry: (entry) => {
+      setTimeEntries((es) => [...es, entry]);
+      dbUpsertTimeEntry(entry);
+    },
+    updateTimeEntry: (id, data) => {
+      setTimeEntries((es) => es.map((e) => {
+        if (e.id === id) {
+          const updated = { ...e, ...data };
+          dbUpsertTimeEntry(updated);
+          return updated;
+        }
+        return e;
+      }));
+    },
+    deleteTimeEntry: (id) => {
+      setTimeEntries((es) => es.filter((e) => e.id !== id));
+      dbDeleteTimeEntry(id);
+    },
     startTimer: (entryData) => {
       const entry: TimeEntry = { ...entryData, id: generateId(), startTime: new Date(), createdAt: new Date() };
       setActiveTimerEntry(entry);
@@ -273,37 +414,101 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           endTime: new Date(),
           duration: Math.floor((Date.now() - activeTimerEntry.startTime.getTime()) / 60000),
         };
-        setTimeEntries(es => [...es, completed]);
+        setTimeEntries((es) => [...es, completed]);
+        dbUpsertTimeEntry(completed);
         setActiveTimerEntry(null);
       }
     },
 
-    addHospitalVisit: (visit) => setHospitalVisits(vs => [...vs, visit]),
-    updateHospitalVisit: (id, data) => setHospitalVisits(vs => vs.map(v => v.id === id ? { ...v, ...data } : v)),
-    deleteHospitalVisit: (id) => setHospitalVisits(vs => vs.filter(v => v.id !== id)),
+    addHospitalVisit: (visit) => {
+      setHospitalVisits((vs) => [...vs, visit]);
+      dbUpsertHospitalVisit(visit);
+    },
+    updateHospitalVisit: (id, data) => {
+      setHospitalVisits((vs) => vs.map((v) => {
+        if (v.id === id) {
+          const updated = { ...v, ...data };
+          dbUpsertHospitalVisit(updated);
+          return updated;
+        }
+        return v;
+      }));
+    },
+    deleteHospitalVisit: (id) => {
+      setHospitalVisits((vs) => vs.filter((v) => v.id !== id));
+      dbDeleteHospitalVisit(id);
+    },
 
-    addContent: (item) => setContent(cs => [...cs, item]),
-    updateContent: (id, data) => setContent(cs => cs.map(c => c.id === id ? { ...c, ...data, updatedAt: new Date() } : c)),
-    deleteContent: (id) => setContent(cs => cs.filter(c => c.id !== id)),
+    addContent: (item) => {
+      setContent((cs) => [...cs, item]);
+      dbUpsertContent(item);
+    },
+    updateContent: (id, data) => {
+      setContent((cs) => cs.map((c) => {
+        if (c.id === id) {
+          const updated = { ...c, ...data, updatedAt: new Date() };
+          dbUpsertContent(updated);
+          return updated;
+        }
+        return c;
+      }));
+    },
+    deleteContent: (id) => {
+      setContent((cs) => cs.filter((c) => c.id !== id));
+      dbDeleteContent(id);
+    },
 
-    addLeetCodeProblem: (problem) => setLeetcodeProblems(ps => [...ps, problem]),
-    updateLeetCodeProblem: (id, data) => setLeetcodeProblems(ps => ps.map(p => p.id === id ? { ...p, ...data, updatedAt: new Date() } : p)),
-    deleteLeetCodeProblem: (id) => setLeetcodeProblems(ps => ps.filter(p => p.id !== id)),
+    addLeetCodeProblem: (problem) => {
+      setLeetcodeProblems((ps) => [...ps, problem]);
+      dbUpsertLeetCode(problem);
+    },
+    updateLeetCodeProblem: (id, data) => {
+      setLeetcodeProblems((ps) => ps.map((p) => {
+        if (p.id === id) {
+          const updated = { ...p, ...data, updatedAt: new Date() };
+          dbUpsertLeetCode(updated);
+          return updated;
+        }
+        return p;
+      }));
+    },
+    deleteLeetCodeProblem: (id) => {
+      setLeetcodeProblems((ps) => ps.filter((p) => p.id !== id));
+      dbDeleteLeetCode(id);
+    },
 
-    addCourse: (course) => setCourses(cs => [...cs, course]),
-    updateCourse: (id, data) => setCourses(cs => cs.map(c => c.id === id ? { ...c, ...data, updatedAt: new Date() } : c)),
-    addLearningSession: (session) => setLearningSessions(ss => [...ss, session]),
+    addCourse: (course) => setCourses((cs) => [...cs, course]),
+    updateCourse: (id, data) => setCourses((cs) => cs.map((c) => c.id === id ? { ...c, ...data, updatedAt: new Date() } : c)),
+    addLearningSession: (session) => setLearningSessions((ss) => [...ss, session]),
 
-    addConcept: (concept) => setConcepts(cs => [...cs, concept]),
-    updateConcept: (id, data) => setConcepts(cs => cs.map(c => c.id === id ? { ...c, ...data, updatedAt: new Date() } : c)),
-    deleteConcept: (id) => setConcepts(cs => cs.filter(c => c.id !== id)),
+    addConcept: (concept) => {
+      setConcepts((cs) => [...cs, concept]);
+      dbUpsertConcept(concept);
+    },
+    updateConcept: (id, data) => {
+      setConcepts((cs) => cs.map((c) => {
+        if (c.id === id) {
+          const updated = { ...c, ...data, updatedAt: new Date() };
+          dbUpsertConcept(updated);
+          return updated;
+        }
+        return c;
+      }));
+    },
+    deleteConcept: (id) => setConcepts((cs) => cs.filter((c) => c.id !== id)),
+
     reviewConcept: (id, rating) => {
-      setConcepts(cs => cs.map(c => {
+      let updatedConcept: KnowledgeConcept | null = null;
+      let prevInterval = 1;
+      let newInterval = 1;
+
+      setConcepts((cs) => cs.map((c) => {
         if (c.id !== id) return c;
-        const newInterval = getNextInterval(rating, c.currentIntervalDays || 1);
+        prevInterval = c.currentIntervalDays || 1;
+        newInterval = getNextInterval(rating, prevInterval);
         const nextReview = new Date();
         nextReview.setDate(nextReview.getDate() + newInterval);
-        return {
+        updatedConcept = {
           ...c,
           reviewCount: c.reviewCount + 1,
           correctCount: rating === 'good' || rating === 'easy' ? c.correctCount + 1 : c.correctCount,
@@ -313,23 +518,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           lastReviewedAt: new Date(),
           updatedAt: new Date(),
         };
+        return updatedConcept;
       }));
+
+      if (updatedConcept) {
+        dbUpsertConcept(updatedConcept);
+        dbRecordReview(id, rating, prevInterval, newInterval);
+      }
+
       const review: KnowledgeReview = {
         id: generateId(),
         conceptId: id,
         reviewedAt: new Date(),
         rating,
-        previousInterval: concepts.find(c => c.id === id)?.currentIntervalDays || 1,
-        newInterval: getNextInterval(rating, concepts.find(c => c.id === id)?.currentIntervalDays || 1),
+        previousInterval: prevInterval,
+        newInterval: newInterval,
       };
-      setReviews(rs => [...rs, review]);
+      setReviews((rs) => [...rs, review]);
     },
 
-    addInterviewQuestion: (q) => setInterviewQuestions(qs => [...qs, q]),
-    updateInterviewQuestion: (id, data) => setInterviewQuestions(qs => qs.map(q => q.id === id ? { ...q, ...data, updatedAt: new Date() } : q)),
+    addInterviewQuestion: (q) => setInterviewQuestions((qs) => [...qs, q]),
+    updateInterviewQuestion: (id, data) => setInterviewQuestions((qs) => qs.map((q) => q.id === id ? { ...q, ...data, updatedAt: new Date() } : q)),
     recordInterviewAttempt: (attempt) => {
-      setInterviewAttempts(as => [...as, attempt]);
-      setInterviewQuestions(qs => qs.map(q => q.id === attempt.questionId ? {
+      setInterviewAttempts((as) => [...as, attempt]);
+      dbRecordInterviewAttempt(attempt.id, attempt.questionId, attempt.myAnswer, attempt.rating);
+      setInterviewQuestions((qs) => qs.map((q) => q.id === attempt.questionId ? {
         ...q,
         attemptCount: q.attemptCount + 1,
         lastAttemptRating: attempt.rating,
@@ -338,11 +551,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       } : q));
     },
 
-    addArchitecturePattern: (p) => setArchitecturePatterns(ps => [...ps, p]),
-    updateArchitecturePattern: (id, data) => setArchitecturePatterns(ps => ps.map(p => p.id === id ? { ...p, ...data, updatedAt: new Date() } : p)),
+    addArchitecturePattern: (p) => setArchitecturePatterns((ps) => [...ps, p]),
+    updateArchitecturePattern: (id, data) => setArchitecturePatterns((ps) => ps.map((p) => p.id === id ? { ...p, ...data, updatedAt: new Date() } : p)),
 
-    addWeeklyReview: (review) => setWeeklyReviews(rs => [...rs, review]),
-    updateWeeklyReview: (id, data) => setWeeklyReviews(rs => rs.map(r => r.id === id ? { ...r, ...data } : r)),
+    addWeeklyReview: (review) => {
+      setWeeklyReviews((rs) => [...rs, review]);
+      dbUpsertWeeklyReview(review);
+    },
+    updateWeeklyReview: (id, data) => setWeeklyReviews((rs) => rs.map((r) => r.id === id ? { ...r, ...data } : r)),
   };
 
   return <StoreContext.Provider value={store}>{children}</StoreContext.Provider>;
